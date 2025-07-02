@@ -152,7 +152,7 @@ The project expects the amalgamation in `sqlite-amalgamation-3450000/` directory
 # Download WASI SDK (adjust version as needed)
 wget https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-20/wasi-sdk-20.0-linux.tar.gz
 tar xzf wasi-sdk-20.0-linux.tar.gz
-export WASI_SDK_PATH=/path/to/wasi-sdk-20.0
+export WASI_SDK_PATH=/home/somebody/src/wasql/me/wasi-sdk-20.0
 
 # Verify installation
 $WASI_SDK_PATH/bin/clang --version
