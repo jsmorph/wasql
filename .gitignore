@@ -1,0 +1,43 @@
+# Compiled executables
+test_vfs.wasm
+test_block
+test_vfs_native
+test_vfs_comprehensive
+test_vfs_simple
+test_vfs
+
+# Log files
+*.log
+
+# SQLite database files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Block storage directories
+*.blocks/
+
+# Test artifacts
+simple_test.*
+debug_test.*
+regular_*
+block_*
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*.backup
+
+sqlite-amalgamation-3450000.zip
+sqlite-amalgamation-3450000

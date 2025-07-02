@@ -1,0 +1,490 @@
+/*
+** SQLite Logging VFS Extension
+** 
+** This VFS wraps the default VFS and logs all file operations.
+** Useful for debugging, monitoring, or audit trails.
+*/
+
+#include "sqlite3.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <time.h>
+#include <stdarg.h>
+
+/*
+** Forward declarations
+*/
+static sqlite3_vfs *pDefaultVfs = 0;
+static FILE *logFile = 0;
+
+/*
+** Logging helper function
+*/
+static void logVfsOperation(const char *operation, const char *filename, const char *format, ...) {
+    if (!logFile) return;
+    
+    time_t now;
+    time(&now);
+    char *timeStr = ctime(&now);
+    timeStr[strlen(timeStr)-1] = '\0'; // Remove newline
+    
+    fprintf(logFile, "[%s] %s: %s - ", timeStr, operation, filename ? filename : "NULL");
+    
+    va_list args;
+    va_start(args, format);
+    vfprintf(logFile, format, args);
+    va_end(args);
+    
+    fprintf(logFile, "\n");
+    fflush(logFile);
+}
+
+/*
+** File structure for our VFS
+*/
+typedef struct LoggingFile LoggingFile;
+struct LoggingFile {
+    sqlite3_file base;          /* Base class. Must be first. */
+    sqlite3_file *pReal;        /* The real underlying file */
+    char *zName;               /* Name of the file */
+};
+
+/*
+** Close a file.
+*/
+static int loggingClose(sqlite3_file *pFile){
+    LoggingFile *p = (LoggingFile*)pFile;
+    int rc;
+    
+    logVfsOperation("CLOSE", p->zName, "Closing file");
+    
+    rc = p->pReal->pMethods->xClose(p->pReal);
+    
+    sqlite3_free(p->zName);
+    sqlite3_free(p->pReal);
+    
+    logVfsOperation("CLOSE", p->zName, "File closed, rc=%d", rc);
+    return rc;
+}
+
+/*
+** Read data from a file.
+*/
+static int loggingRead(sqlite3_file *pFile, void *zBuf, int iAmt, sqlite3_int64 iOfst){
+    LoggingFile *p = (LoggingFile*)pFile;
+    int rc;
+    
+    logVfsOperation("READ", p->zName, "Reading %d bytes at offset %lld", iAmt, iOfst);
+    
+    rc = p->pReal->pMethods->xRead(p->pReal, zBuf, iAmt, iOfst);
+    
+    logVfsOperation("READ", p->zName, "Read completed, rc=%d", rc);
+    return rc;
+}
+
+/*
+** Write data to a file.
+*/
+static int loggingWrite(sqlite3_file *pFile, const void *zBuf, int iAmt, sqlite3_int64 iOfst){
+    LoggingFile *p = (LoggingFile*)pFile;
+    int rc;
+    
+    logVfsOperation("WRITE", p->zName, "Writing %d bytes at offset %lld", iAmt, iOfst);
+    
+    rc = p->pReal->pMethods->xWrite(p->pReal, zBuf, iAmt, iOfst);
+    
+    logVfsOperation("WRITE", p->zName, "Write completed, rc=%d", rc);
+    return rc;
+}
+
+/*
+** Truncate a file.
+*/
+static int loggingTruncate(sqlite3_file *pFile, sqlite3_int64 size){
+    LoggingFile *p = (LoggingFile*)pFile;
+    int rc;
+    
+    logVfsOperation("TRUNCATE", p->zName, "Truncating to %lld bytes", size);
+    
+    rc = p->pReal->pMethods->xTruncate(p->pReal, size);
+    
+    logVfsOperation("TRUNCATE", p->zName, "Truncate completed, rc=%d", rc);
+    return rc;
+}
+
+/*
+** Sync a file.
+*/
+static int loggingSync(sqlite3_file *pFile, int flags){
+    LoggingFile *p = (LoggingFile*)pFile;
+    int rc;
+    
+    logVfsOperation("SYNC", p->zName, "Syncing with flags %d", flags);
+    
+    rc = p->pReal->pMethods->xSync(p->pReal, flags);
+    
+    logVfsOperation("SYNC", p->zName, "Sync completed, rc=%d", rc);
+    return rc;
+}
+
+/*
+** Return the current file-size of a file.
+*/
+static int loggingFileSize(sqlite3_file *pFile, sqlite3_int64 *pSize){
+    LoggingFile *p = (LoggingFile*)pFile;
+    int rc;
+    
+    rc = p->pReal->pMethods->xFileSize(p->pReal, pSize);
+    
+    logVfsOperation("FILESIZE", p->zName, "File size: %lld bytes, rc=%d", *pSize, rc);
+    return rc;
+}
+
+/*
+** Lock a file.
+*/
+static int loggingLock(sqlite3_file *pFile, int eLock){
+    LoggingFile *p = (LoggingFile*)pFile;
+    int rc;
+    
+    const char *lockType = "UNKNOWN";
+    switch(eLock){
+        case SQLITE_LOCK_NONE:      lockType = "NONE"; break;
+        case SQLITE_LOCK_SHARED:    lockType = "SHARED"; break;
+        case SQLITE_LOCK_RESERVED:  lockType = "RESERVED"; break;
+        case SQLITE_LOCK_PENDING:   lockType = "PENDING"; break;
+        case SQLITE_LOCK_EXCLUSIVE: lockType = "EXCLUSIVE"; break;
+    }
+    
+    logVfsOperation("LOCK", p->zName, "Acquiring %s lock", lockType);
+    
+    rc = p->pReal->pMethods->xLock(p->pReal, eLock);
+    
+    logVfsOperation("LOCK", p->zName, "Lock acquisition completed, rc=%d", rc);
+    return rc;
+}
+
+/*
+** Unlock a file.
+*/
+static int loggingUnlock(sqlite3_file *pFile, int eLock){
+    LoggingFile *p = (LoggingFile*)pFile;
+    int rc;
+    
+    const char *lockType = "UNKNOWN";
+    switch(eLock){
+        case SQLITE_LOCK_NONE:      lockType = "NONE"; break;
+        case SQLITE_LOCK_SHARED:    lockType = "SHARED"; break;
+        case SQLITE_LOCK_RESERVED:  lockType = "RESERVED"; break;
+        case SQLITE_LOCK_PENDING:   lockType = "PENDING"; break;
+        case SQLITE_LOCK_EXCLUSIVE: lockType = "EXCLUSIVE"; break;
+    }
+    
+    logVfsOperation("UNLOCK", p->zName, "Releasing to %s lock", lockType);
+    
+    rc = p->pReal->pMethods->xUnlock(p->pReal, eLock);
+    
+    logVfsOperation("UNLOCK", p->zName, "Lock release completed, rc=%d", rc);
+    return rc;
+}
+
+/*
+** Check if another file-handle holds a RESERVED lock on a file.
+*/
+static int loggingCheckReservedLock(sqlite3_file *pFile, int *pResOut){
+    LoggingFile *p = (LoggingFile*)pFile;
+    int rc;
+    
+    rc = p->pReal->pMethods->xCheckReservedLock(p->pReal, pResOut);
+    
+    logVfsOperation("CHECK_RESERVED", p->zName, "Reserved lock check: %s, rc=%d", 
+                   *pResOut ? "RESERVED" : "NOT RESERVED", rc);
+    return rc;
+}
+
+/*
+** File control method.
+*/
+static int loggingFileControl(sqlite3_file *pFile, int op, void *pArg){
+    LoggingFile *p = (LoggingFile*)pFile;
+    int rc;
+    
+    logVfsOperation("FILE_CONTROL", p->zName, "File control operation %d", op);
+    
+    rc = p->pReal->pMethods->xFileControl(p->pReal, op, pArg);
+    
+    logVfsOperation("FILE_CONTROL", p->zName, "File control completed, rc=%d", rc);
+    return rc;
+}
+
+/*
+** Return the sector-size in bytes for a file.
+*/
+static int loggingSectorSize(sqlite3_file *pFile){
+    LoggingFile *p = (LoggingFile*)pFile;
+    int sectorSize;
+    
+    sectorSize = p->pReal->pMethods->xSectorSize(p->pReal);
+    
+    logVfsOperation("SECTOR_SIZE", p->zName, "Sector size: %d bytes", sectorSize);
+    return sectorSize;
+}
+
+/*
+** Return the device characteristic flags supported by a file.
+*/
+static int loggingDeviceCharacteristics(sqlite3_file *pFile){
+    LoggingFile *p = (LoggingFile*)pFile;
+    int characteristics;
+    
+    characteristics = p->pReal->pMethods->xDeviceCharacteristics(p->pReal);
+    
+    logVfsOperation("DEVICE_CHARS", p->zName, "Device characteristics: 0x%x", characteristics);
+    return characteristics;
+}
+
+/*
+** Methods for LoggingFile
+*/
+static const sqlite3_io_methods loggingIoMethods = {
+    3,                              /* iVersion */
+    loggingClose,                   /* xClose */
+    loggingRead,                    /* xRead */
+    loggingWrite,                   /* xWrite */
+    loggingTruncate,                /* xTruncate */
+    loggingSync,                    /* xSync */
+    loggingFileSize,                /* xFileSize */
+    loggingLock,                    /* xLock */
+    loggingUnlock,                  /* xUnlock */
+    loggingCheckReservedLock,       /* xCheckReservedLock */
+    loggingFileControl,             /* xFileControl */
+    loggingSectorSize,              /* xSectorSize */
+    loggingDeviceCharacteristics,   /* xDeviceCharacteristics */
+    0,                              /* xShmMap */
+    0,                              /* xShmLock */
+    0,                              /* xShmBarrier */
+    0,                              /* xShmUnmap */
+    0,                              /* xFetch */
+    0                               /* xUnfetch */
+};
+
+/*
+** Open a file.
+*/
+static int loggingOpen(
+    sqlite3_vfs *pVfs,           /* The VFS */
+    const char *zName,           /* File to open, or 0 for a temp file */
+    sqlite3_file *pFile,         /* Pointer to LoggingFile struct to populate */
+    int flags,                   /* Input SQLITE_OPEN_XXX flags */
+    int *pOutFlags               /* Output SQLITE_OPEN_XXX flags (or NULL) */
+){
+    LoggingFile *p = (LoggingFile*)pFile;
+    int rc;
+    
+    logVfsOperation("OPEN", zName, "Opening file with flags 0x%x", flags);
+    
+    p->pReal = (sqlite3_file*)sqlite3_malloc(pDefaultVfs->szOsFile);
+    if( p->pReal==0 ){
+        logVfsOperation("OPEN", zName, "Failed to allocate memory for real file");
+        return SQLITE_NOMEM;
+    }
+    
+    rc = pDefaultVfs->xOpen(pDefaultVfs, zName, p->pReal, flags, pOutFlags);
+    if( rc!=SQLITE_OK ){
+        sqlite3_free(p->pReal);
+        logVfsOperation("OPEN", zName, "Failed to open real file, rc=%d", rc);
+        return rc;
+    }
+    
+    if( zName ){
+        p->zName = sqlite3_mprintf("%s", zName);
+    } else {
+        p->zName = sqlite3_mprintf("temp_file_%p", (void*)p);
+    }
+    
+    p->base.pMethods = &loggingIoMethods;
+    
+    logVfsOperation("OPEN", p->zName, "File opened successfully");
+    return SQLITE_OK;
+}
+
+/*
+** Delete a file.
+*/
+static int loggingDelete(sqlite3_vfs *pVfs, const char *zPath, int syncDir){
+    int rc;
+    
+    logVfsOperation("DELETE", zPath, "Deleting file, syncDir=%d", syncDir);
+    
+    rc = pDefaultVfs->xDelete(pDefaultVfs, zPath, syncDir);
+    
+    logVfsOperation("DELETE", zPath, "Delete completed, rc=%d", rc);
+    return rc;
+}
+
+/*
+** Test for access permissions.
+*/
+static int loggingAccess(sqlite3_vfs *pVfs, const char *zPath, int flags, int *pResOut){
+    int rc;
+    
+    const char *accessType = "UNKNOWN";
+    switch(flags){
+        case SQLITE_ACCESS_EXISTS:    accessType = "EXISTS"; break;
+        case SQLITE_ACCESS_READWRITE: accessType = "READWRITE"; break;
+        case SQLITE_ACCESS_READ:      accessType = "READ"; break;
+    }
+    
+    logVfsOperation("ACCESS", zPath, "Checking %s access", accessType);
+    
+    rc = pDefaultVfs->xAccess(pDefaultVfs, zPath, flags, pResOut);
+    
+    logVfsOperation("ACCESS", zPath, "Access check result: %s, rc=%d", 
+                   *pResOut ? "GRANTED" : "DENIED", rc);
+    return rc;
+}
+
+/*
+** Populate buffer zOut with the full canonical pathname corresponding
+** to the pathname in zPath.
+*/
+static int loggingFullPathname(sqlite3_vfs *pVfs, const char *zPath, int nOut, char *zOut){
+    int rc;
+    
+    logVfsOperation("FULLPATH", zPath, "Getting full pathname");
+    
+    rc = pDefaultVfs->xFullPathname(pDefaultVfs, zPath, nOut, zOut);
+    
+    logVfsOperation("FULLPATH", zPath, "Full path: %s, rc=%d", zOut, rc);
+    return rc;
+}
+
+/*
+** The remaining VFS methods are pass-throughs to the default VFS.
+*/
+static void *loggingDlOpen(sqlite3_vfs *pVfs, const char *zPath){
+    return pDefaultVfs->xDlOpen(pDefaultVfs, zPath);
+}
+static void loggingDlError(sqlite3_vfs *pVfs, int nByte, char *zErrMsg){
+    pDefaultVfs->xDlError(pDefaultVfs, nByte, zErrMsg);
+}
+static void (*loggingDlSym(sqlite3_vfs *pVfs, void *p, const char *zSym))(void){
+    return pDefaultVfs->xDlSym(pDefaultVfs, p, zSym);
+}
+static void loggingDlClose(sqlite3_vfs *pVfs, void *pHandle){
+    pDefaultVfs->xDlClose(pDefaultVfs, pHandle);
+}
+static int loggingRandomness(sqlite3_vfs *pVfs, int nByte, char *zByte){
+    return pDefaultVfs->xRandomness(pDefaultVfs, nByte, zByte);
+}
+static int loggingSleep(sqlite3_vfs *pVfs, int nMicro){
+    return pDefaultVfs->xSleep(pDefaultVfs, nMicro);
+}
+static int loggingCurrentTime(sqlite3_vfs *pVfs, double *pTimeOut){
+    return pDefaultVfs->xCurrentTime(pDefaultVfs, pTimeOut);
+}
+static int loggingGetLastError(sqlite3_vfs *pVfs, int nByte, char *zErrMsg){
+    return pDefaultVfs->xGetLastError(pDefaultVfs, nByte, zErrMsg);
+}
+static int loggingCurrentTimeInt64(sqlite3_vfs *pVfs, sqlite3_int64 *pTimeOut){
+    return pDefaultVfs->xCurrentTimeInt64(pDefaultVfs, pTimeOut);
+}
+
+/*
+** The VFS structure for the logging VFS.
+*/
+static sqlite3_vfs loggingVfs = {
+    3,                      /* iVersion */
+    0,                      /* szOsFile (set when registered) */
+    1024,                   /* mxPathname */
+    0,                      /* pNext */
+    "logging",              /* zName */
+    0,                      /* pAppData */
+    loggingOpen,            /* xOpen */
+    loggingDelete,          /* xDelete */
+    loggingAccess,          /* xAccess */
+    loggingFullPathname,    /* xFullPathname */
+    loggingDlOpen,          /* xDlOpen */
+    loggingDlError,         /* xDlError */
+    loggingDlSym,           /* xDlSym */
+    loggingDlClose,         /* xDlClose */
+    loggingRandomness,      /* xRandomness */
+    loggingSleep,           /* xSleep */
+    loggingCurrentTime,     /* xCurrentTime */
+    loggingGetLastError,    /* xGetLastError */
+    loggingCurrentTimeInt64 /* xCurrentTimeInt64 */
+};
+
+/*
+** Register the logging VFS.
+*/
+int sqlite3_loggingvfs_init(const char *logFilePath){
+    pDefaultVfs = sqlite3_vfs_find(0);
+    if( pDefaultVfs==0 ) return SQLITE_ERROR;
+    
+    // Open log file
+    if( logFilePath ){
+        logFile = fopen(logFilePath, "a");
+        if( !logFile ){
+            fprintf(stderr, "Failed to open log file: %s\n", logFilePath);
+            return SQLITE_ERROR;
+        }
+    } else {
+        logFile = stdout;  // Default to stdout
+    }
+    
+    loggingVfs.szOsFile = sizeof(LoggingFile);
+    
+    logVfsOperation("INIT", NULL, "Logging VFS initialized with log file: %s", 
+                   logFilePath ? logFilePath : "stdout");
+    
+    return sqlite3_vfs_register(&loggingVfs, 0);
+}
+
+/*
+** Unregister the logging VFS and close log file.
+*/
+int sqlite3_loggingvfs_shutdown(){
+    int rc = sqlite3_vfs_unregister(&loggingVfs);
+    
+    if( logFile && logFile != stdout ){
+        fclose(logFile);
+        logFile = 0;
+    }
+    
+    return rc;
+}
+
+/*
+** Usage example as a C library:
+**
+** #include "sqlite3.h"
+** 
+** int main(){
+**     sqlite3 *db;
+**     int rc;
+**     
+**     // Initialize the logging VFS
+**     sqlite3_loggingvfs_init("sqlite_operations.log");
+**     
+**     // Open database using the logging VFS
+**     rc = sqlite3_open_v2("test.db", &db, 
+**                          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+**                          "logging");
+**     
+**     if( rc ){
+**         fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(db));
+**         return 1;
+**     }
+**     
+**     // Perform database operations - all will be logged
+**     sqlite3_exec(db, "CREATE TABLE test(id INTEGER, name TEXT);", 0, 0, 0);
+**     sqlite3_exec(db, "INSERT INTO test VALUES(1, 'Hello');", 0, 0, 0);
+**     
+**     sqlite3_close(db);
+**     sqlite3_loggingvfs_shutdown();
+**     
+**     return 0;
+** }
+*/
