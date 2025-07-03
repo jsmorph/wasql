@@ -1,14 +1,14 @@
 #include "sqlite3.h"
 #include <stdio.h>
 
-#define n 1000
-
 // Forward declarations from your VFS
 extern int sqlite3_loggingvfs_init(const char *logFilePath);
 extern int sqlite3_loggingvfs_shutdown(void);
 extern void sqlite3_loggingvfs_set_block_storage(int enable);
+extern void sqlite3_loggingvfs_set_logging(int enable);
 
 int main() {
+    int n = 1000;
     sqlite3 *db;
     int rc;
     
@@ -17,6 +17,7 @@ int main() {
     // Enable block storage
     printf("Enabling block storage ...\n");
     sqlite3_loggingvfs_set_block_storage(1);
+    sqlite3_loggingvfs_set_logging(0);
     
     rc = sqlite3_loggingvfs_init("operations.log");
     if (rc != SQLITE_OK) {
@@ -45,7 +46,7 @@ int main() {
     }
     
     printf("Deletiing data ...\n");
-    rc = sqlite3_exec(db, "DELETE FROM users WHERE id <= 10", 0, 0, 0);
+    rc = sqlite3_exec(db, "DELETE FROM users WHERE id % 10 = 0", 0, 0, 0);
     if (rc != SQLITE_OK) {
         fprintf(stderr, "Error %s: DELETE FROM \n", sqlite3_errmsg(db));
         return 1;

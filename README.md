@@ -158,6 +158,22 @@ export WASI_SDK_PATH=/home/somebody/src/wasql/me/wasi-sdk-20.0
 $WASI_SDK_PATH/bin/clang --version
 ```
 
+### Wasmtime Installation
+
+```bash
+# Install wasmtime (WASM runtime)
+curl https://wasmtime.dev/install.sh -sSf | bash
+source ~/.bashrc
+
+# Or download directly
+wget https://github.com/bytecodealliance/wasmtime/releases/download/v14.0.4/wasmtime-v14.0.4-x86_64-linux.tar.xz
+tar xf wasmtime-v14.0.4-x86_64-linux.tar.xz
+export PATH=$PATH:$(pwd)/wasmtime-v14.0.4-x86_64-linux
+
+# Verify installation
+wasmtime --version
+```
+
 ## Performance Characteristics
 
 - Read Amplification: 4KB minimum read unit

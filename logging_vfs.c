@@ -21,12 +21,13 @@
 static sqlite3_vfs *pDefaultVfs = 0;
 static FILE *logFile = 0;
 static int useBlockStorage = 0; /* 0 = use default VFS, 1 = use block storage */
+static int loggingEnabled = 1; /* 0 = disable logging, 1 = enable logging */
 
 /*
 ** Logging helper function
 */
 static void logVfsOperation(const char *operation, const char *filename, const char *format, ...) {
-    if (!logFile) return;
+    if (!logFile || !loggingEnabled) return;
     
     time_t now;
     time(&now);
@@ -586,27 +587,36 @@ void sqlite3_loggingvfs_set_block_storage(int enable){
 }
 
 /*
+** Enable or disable logging.
+*/
+void sqlite3_loggingvfs_set_logging(int enable){
+    loggingEnabled = enable;
+}
+
+/*
 ** Register the logging VFS.
 */
 int sqlite3_loggingvfs_init(const char *logFilePath){
     pDefaultVfs = sqlite3_vfs_find(0);
     if( pDefaultVfs==0 ) return SQLITE_ERROR;
     
-    // Open log file
-    if( logFilePath ){
-        logFile = fopen(logFilePath, "a");
-        if( !logFile ){
-            fprintf(stderr, "Failed to open log file: %s\n", logFilePath);
-            return SQLITE_ERROR;
+    // Only open log file if logging is enabled
+    if( loggingEnabled ){
+        if( logFilePath ){
+            logFile = fopen(logFilePath, "a");
+            if( !logFile ){
+                fprintf(stderr, "Failed to open log file: %s\n", logFilePath);
+                return SQLITE_ERROR;
+            }
+        } else {
+            logFile = stdout;  // Default to stdout
         }
-    } else {
-        logFile = stdout;  // Default to stdout
     }
     
     loggingVfs.szOsFile = sizeof(LoggingFile);
     
     logVfsOperation("INIT", NULL, "Logging VFS initialized with log file: %s, block storage: %s", 
-                   logFilePath ? logFilePath : "stdout", useBlockStorage ? "ENABLED" : "DISABLED");
+                   loggingEnabled ? (logFilePath ? logFilePath : "stdout") : "DISABLED", useBlockStorage ? "ENABLED" : "DISABLED");
     
     return sqlite3_vfs_register(&loggingVfs, 0);
 }

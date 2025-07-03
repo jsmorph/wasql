@@ -76,12 +76,12 @@ run_simple_test: test_vfs_simple
 
 clean:
 	rm -f *.wasm
-	rm -f test_block test_vfs_native test_vfs_comprehensive test_vfs_simple debug_vfs
+	rm -f test_block test_vfs_native test_vfs_comprehensive test_vfs_simple
 	rm -f *.log
 	rm -f test*.db test*.db-journal test*.db-wal test*.db-shm
 	rm -rf *.blocks
-	rm -f simple_test.* debug_test.* regular_* block_*
-	rm -rf test_*.blocks debug_*.blocks regular_*.blocks block_*.blocks
+	rm -f simple_test.* regular_* block_*
+	rm -rf test_*.blocks regular_*.blocks block_*.blocks
 
 # Build and run all native tests from scratch
 test_all_native: clean run_block_test run_simple_test run_comprehensive_test
